@@ -12,7 +12,9 @@ The CodaLab competition link will be available here.
 
 ## Outline 
 [I - Overview](#i---overview)
+
 [II - Installation](#ii---installation)
+
 [III - References](#iii---references)
 
 ---
