@@ -1,0 +1,16 @@
+data_format: episode # Can be episode or batch
+train_pool_size: 0.75 # Percentage of available classes per dataset to be used 
+                      # for training. The remaining classes  will be used for 
+                      # validation
+num_ways: 3 # Number of classes for the training episodes. Only used if 
+            # data_format is episode
+min_s: 1 # Minimum number of shots for the validation episodes. It is also used
+         # to generate the training episodes if data_format is episode
+max_s: 5 # Maximum number of shots for the validation episodes. It is also used
+         # to generate the training episodes if data_format is episode
+fixed_query_size: True # Flag to control the size of the query set. If True, 
+                       # query size must be specified, else, all the available 
+                       # information not used for the support set will be used
+                       # as query set
+query_size: 10 # Number of images for the query set. Only used if 
+               # fixed_query_size is True
