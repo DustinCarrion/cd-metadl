@@ -24,7 +24,7 @@ This is the official repository of the [Cross-Domain MetaDL: Any-Way Any-Shot Le
 
 The competition focus on any-way any-shot learning for image classification. This is an **online competition**, *i.e.*, you need to provide your submission as raw Python code that will be ran on the CodaLab platform. The code is designed to be flexible and allows participants to explore any type of meta-learning algorithms.
 
-You can find more informations on the [Official website](https://metalearning.chalearn.org).
+You can find more information on the [Official website](https://metalearning.chalearn.org).
 
 ## II - Installation
 
