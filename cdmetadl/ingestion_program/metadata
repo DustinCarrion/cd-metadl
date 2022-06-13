@@ -1,2 +1,0 @@
-command: python3 $ingestion_program/ingestion.py $input $output $ingestion_program $submission_program
-description: Train and evaluate your submission

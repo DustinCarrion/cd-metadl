@@ -1,139 +1,23 @@
+""" Helper functions to use in the scoring program. 
+
+AS A PARTICIPANT, DO NOT MODIFY THIS CODE.
+"""
 import os
-import shutil
-import yaml
 import base64
-import re
 import numpy as np
 import pandas as pd
-import scipy.stats as ss
+import scipy.stats as st
 import seaborn as sns
 import matplotlib.pyplot as plt
 from sys import modules
-from glob import glob as ls
 from sklearn.metrics import accuracy_score, f1_score, precision_score, \
     recall_score
-from typing import Tuple, List, Callable
+from typing import Tuple, Callable
 
 
 # =============================================================================
-# ============================ GENERAL HELPERS ================================
+# ========================= SCORE RELATED HELPERS =============================
 # =============================================================================
-
-
-def vprint(message: str, 
-           verbose: bool) -> None:
-    """ Print a message based on the verbose mode.
-
-    Args:
-        message (str): Message to be printed.
-        verbose (bool): Verbose mode.
-    """
-    if verbose: 
-        print(message)
-
-
-def exist_dir(dir: str) -> bool:
-    """ Check if a directory exists.
-
-    Args:
-        dir (str): Directory to be checked.
-
-    Raises:
-        NotADirectoryError: Error raised when the directory does not exist.
-        
-    Returns:
-        bool: True if the directory exists, an error is raised otherwise.
-    """
-    if os.path.isdir(dir):
-        return True
-    raise NotADirectoryError(f"In exist_dir, directory '{dir}' not found")
-
-
-def print_list(lst: List[str]) -> None:
-    """ Print all the elements inside a list.
-
-    Args:
-        lst (List[str]): List to be printed.
-    """
-    for item in lst:
-        print(item)
-        
-        
-def show_dir(dir: str = ".") -> None:
-    """ Shows all the files and directories inside the specified directory up 
-    to the fourth level deep.
-
-    Args:
-        dir (str, optional): Source directory to be listed. Defaults to '.'.
-    """
-    print(f"{'='*10} Listing directory {dir} {'='*10}")
-    print_list(ls(dir))
-    print_list(ls(dir + '/*'))
-    print_list(ls(dir + '/*/*'))
-    print_list(ls(dir + '/*/*/*'))
-    print_list(ls(dir + '/*/*/*/*'))
-    
-
-def mvdir(source: str, 
-          dest: str) -> None:
-    """ Move a directory to the specified destination.
-
-    Args:
-        source (str): Current directory location.
-        dest (str): Directory destination.
-        
-    Raises:
-        OSError: Error raised when the directory cannot be renamed.
-    """
-    if os.path.exists(source):
-        try:
-            os.rename(source, dest)
-        except:
-            raise OSError(f"In mvdir, directory '{source}' could not be moved"
-                + f" to '{dest}'")
-            
-            
-def mkdir(dir: str) -> None:
-    """ Create a directory. If the directory already exists, deletes it before 
-    creating it again.
-
-    Args:
-        dir (str): Directory to be created.
-        
-    Raises:
-        OSError: Error raised when the directory cannot not be deleted or 
-            created.
-    """
-    if os.path.exists(dir):
-        try:
-            shutil.rmtree(dir)
-        except:
-            raise OSError(f"In mkdir, directory '{dir}' could not be deleted")
-    
-    try:
-        os.makedirs(dir)
-    except:
-        raise OSError(f"In mkdir, directory '{dir}' could not be created")
- 
-
-def load_yaml(file: str) -> dict:
-    """ Loads the content of a YAML file.
-
-    Args:
-        file (str): File in YAML format.
-
-    Raises:
-        OSError: Error raised when the file cannot be opened.
-
-    Returns:
-        dict: Content of the YAML file.
-    """
-    try:
-        return yaml.safe_load(open(file, "r"))
-    except:
-        raise OSError(f"In load_yaml, file '{file}' could not be opened or "
-            + f"has wrong format")
-
 
 def create_path_here(file: str) -> str:
     """ Create the absolute path of the specified file inside this directory.
@@ -146,25 +30,6 @@ def create_path_here(file: str) -> str:
     """
     curr_dir_path = os.path.dirname(os.path.realpath(__file__))
     return os.path.join(curr_dir_path, file)
-
-
-def natural_sort(text: str) -> list:
-    """ Helper to sort a list of strings with digits in natural order. This
-    helper should be used as the key parameter in the sorted() function.
-
-    Args:
-        text (str): Text to be processed.
-
-    Returns:
-        list: Splitted text into words and digits.
-    """
-    atoi = lambda x: int(x) if x.isdigit() else x
-    return [atoi(c) for c in re.split(r"(\d+)", text)]
-
-
-# =============================================================================
-# ========================= SCORE RELATED HELPERS =============================
-# =============================================================================
 
 
 def read_results_file(file: str, dtype) -> np.ndarray:
@@ -216,7 +81,8 @@ def get_score() -> Tuple[str, Callable[[np.ndarray, np.ndarray], float]]:
 
 def mean_confidence_interval(data: list, 
                              confidence: float = 0.95) -> Tuple[float, float]:
-    """ Compute the mean and the confidence interval of the specified data.
+    """ Compute the mean and the confidence interval of the specified data. The
+    confidence interval is computed at per-task level.
 
     Args:
         data (list): List of scores to be used in the calculations.
@@ -232,8 +98,12 @@ def mean_confidence_interval(data: list,
         return None, None
     if n > 1:
         mean = np.mean(data)
-        se = ss.sem(data)
-        conf_int = se * ss.t.ppf((1 + confidence) / 2., n - 1)
+        scale = st.sem(data)
+        if scale < 1e-15:
+            scale = 1e-15
+        lb, _ = st.t.interval(alpha=confidence, df=len(data)-1, loc=mean, 
+            scale=scale)
+        conf_int = mean - lb 
     else:
         mean = data[0]
         conf_int = 0.0
@@ -333,11 +203,9 @@ def create_heatmap(data: dict,
         heatmap = base64.b64encode(image_file.read()).decode('ascii')
     return heatmap
 
-
 # =============================================================================
 # ============================== SCORE FUNCTIONS ==============================
 # =============================================================================
-
 
 def accuracy(y_true: np.ndarray, 
              y_pred: np.ndarray) -> float:

@@ -62,7 +62,7 @@
         {% for score in scores_names %}
         <p>Average {{score}}: {{overall_scores[score]['mean_score']}} &plusmn; {{overall_scores[score]['ci']}}</p>
         {% endfor %}
-        <p>Evaluated tasks: {{total_tasks}}</p>
+        <p>Evaluated tasks per dataset: {{tasks_per_dataset}}</p>
         <p>Datasets available at testing time: {{total_datasets}}</p>
     </div>
 
@@ -81,7 +81,6 @@
         <table>
             <tr>
                 <th>Dataset</th>
-                <th>Number of Tasks</th>
                 {% for score in scores_names %}
                 <th>Average {{score}}</th>
                 {% endfor %}
@@ -89,7 +88,6 @@
             {% for info in scores_grouped_by_dataset %}
             <tr>
                 <td>{{info['value']}}</td>
-                <td>{{info['tasks']}}</td>
                 {% for i in range(scores_names|length) %}
                 <td>{{info['mean_score'][i]}} &plusmn; {{info['ci'][i]}}</td>
                 {% endfor %}
@@ -180,13 +178,11 @@
                 <th>Task</th>
                 <th>Dataset</th>
                 <th>Number of ways</th>
-                <th>Classes</th>
+                <th>Original classes</th>
                 <th>Number of shots</th>
-                <th>Query size</th>
                 {% for score in scores_names %}
                 <th>{{score}}</th>
                 {% endfor %}
-                <th>Execution time (seconds)</th>
             </tr>
             {% for task in tasks %}
             <tr>
@@ -198,11 +194,9 @@
                     <br> {% endfor %}
                 </td>
                 <td>{{task['num_shots']}}</td>
-                <td>{{task['query_size']}}</td>
                 {% for score_val in task['scores'] %}
                 <td>{{score_val}}</td>
                 {% endfor %}
-                <td>{{task['exec_time']}}</td>
             </tr>
             {% endfor %}
         </table>

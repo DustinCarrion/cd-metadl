@@ -1,2 +1,0 @@
-command: python3 $program/scoring.py $input $output
-description: Compute scores for the competition
