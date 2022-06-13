@@ -3,69 +3,90 @@ scoring are called properly.
 """
 
 import os
+import random
 import numpy as np
 import pickle
-from typing import Tuple
+from torch import Tensor
+from typing import Iterable, Any, Tuple
 
-from api import MetaLearner, Learner, Predictor
+from cdmetadl.ingestion.data_generator import Task
+from cdmetadl.api.api import MetaLearner, Learner, Predictor
 
+SEED = 98
 
 class MyMetaLearner(MetaLearner):
 
-    def __init__(self, N_ways: int, total_train_classes: int) -> None:
-        super().__init__(N_ways, total_train_classes)
+    def __init__(self, train_classes: int) -> None:
+        """ Defines the meta-learning algorithm's parameters. For example, one 
+        has to define what would be the learner meta-learner's architecture. 
+        
+        Args:
+            train_classes (int): Total number of classes that can be seen 
+                during meta-training. If the data format during training is 
+                'task', then this parameter corresponds to the number of ways, 
+                while if the data format is 'batch', this parameter corresponds 
+                to the total number of classes across all training datasets.
+        """
+        super().__init__(train_classes)
+        self.seed = SEED
 
-    def meta_fit(self, meta_train_generator, meta_valid_generator) -> Learner:
-        """ Uses the meta-dataset to fit the meta-learner's parameters. A 
-        meta-dataset can be an epoch (list with batches of images) or a batch 
-        of few-shot learning tasks.
+    def meta_fit(self, 
+                 meta_train_generator: Iterable[Any], 
+                 meta_valid_generator: Iterable[Task]) -> Learner:
+        """ Uses the generators to tune the meta-learner's parameters. The 
+        meta-training generator generates either few-shot learning tasks or 
+        batches of images, while the meta-valid generator always generates 
+        few-shot learning tasks.
         
         Args:
             meta_train_generator: Function that generates the training data.
-                The generated can be an episode (N-ways any-shot learning task) 
-                or a batch of images with labels.
+                The generated can be a N-way k-shot task or a batch of images 
+                with labels.
             meta_valid_generator: Function that generates the validation data.
-                The generated data always come in form of any-ways any-shot 
-                learning tasks.
+                The generated data always come in form of N-way k-shot tasks.
                 
         Returns:
-            Learner: Resulting learner ready to be trained and evaluated on 
-                new unseen tasks.
+            Learner: Resulting learner ready to be trained and evaluated on new
+                unseen tasks.
         """
-        return MyLearner()
+        return MyLearner(self.seed)
 
 
 class MyLearner(Learner):
 
-    def __init__(self):
-        super().__init__()
+    def __init__(self, seed: int = 0) -> None:
+        """ Defines the learner initialization.
 
-    def fit(self, 
-            dataset_train: Tuple[np.ndarray,np.ndarray,int,int]) -> Predictor:
+        Args:
+            seed (int, optional): Random seed. Defaults to 0.
+        """
+        super().__init__()
+        self.seed = seed
+
+    def fit(self, dataset_train: Tuple[Tensor, Tensor, int, int]) -> Predictor:
         """ Fit the Learner to the support set of a new unseen task. 
         
         Args:
-            dataset_train: Support set of a task. The data arrive in the 
-                following format (X_train, y_train, n_ways, k_shots). X_train 
-                is the array of labeled imaged of shape 
-                (n_ways*k_shots x 128 x 128 x 3), y_train are the encoded
-                labels (int) for each image in X_train, n_ways (int) are the 
-                number of classes and k_shots (int) the number of examples per 
-                class.
+            dataset_train (Tuple[Tensor, Tensor, int, int]): Support set of a 
+                task. The data arrive in the following format (X_train, 
+                y_train, n_ways, k_shots). X_train is the tensor of labeled 
+                imaged of shape [n_ways*k_shots x 3 x 128 x 128], y_train is 
+                the tensor of encoded labels (Long) for each image in X_train 
+                with shape of [n_ways*k_shots], n_ways is the number of classes 
+                and k_shots the number of examples per class.
                         
         Returns:
             Predictor: The resulting predictor ready to predict unlabelled 
-                query image examples from the new unseen task.
+                query image examples from new unseen tasks.
         """
         _, y_train, _, _ = dataset_train
-        return MyPredictor(y_train)
+        return MyPredictor(y_train, self.seed)
 
     def save(self, path_to_save: str) -> None:
-        """ Saves the learning object associated to the Learner. It could be 
-        a neural network for example. 
+        """ Saves the learning object associated to the Learner. 
         
         Args:
-            path_to_save (str): Path where the Learner will be saved
+            path_to_save (str): Path where the learning object will be saved.
         """
         
         if not os.path.isdir(path_to_save):
@@ -74,47 +95,54 @@ class MyLearner(Learner):
         
         pickle.dump(self, open(f"{path_to_save}/learner.pickle", "wb"))
  
-    def load(self, path_to_model: str) -> Learner:
+    def load(self, path_to_load: str) -> None:
         """ Loads the learning object associated to the Learner. It should 
-        match the way you saved this object in save().
+        match the way you saved this object in self.save().
         
         Args:
-            path_to_model (str): Path where the Learner is saved
-            
-        Returns:
-            Learner: Loaded learner
+            path_to_load (str): Path where the Learner is saved.
         """
-        if not os.path.isdir(path_to_model):
+        if not os.path.isdir(path_to_load):
             raise ValueError(("The model directory provided is invalid. Please"
                 + " check that its path is valid."))
         
-        model_file = f"{path_to_model}/learner.pickle"
+        model_file = f"{path_to_load}/learner.pickle"
         if os.path.isfile(model_file):
             with open(model_file, "rb") as f:
                 saved_learner = pickle.load(f)
-        return saved_learner
+            self.seed = saved_learner.seed
         
     
 class MyPredictor(Predictor):
 
-    def __init__(self, labels):
-        super().__init__()
-        self.labels = np.unique(labels)
+    def __init__(self, 
+                 labels: Tensor, 
+                 seed: int) -> None:
+        """ Defines the Predictor initialization.
 
-    def predict(self, dataset_test) -> np.ndarray:
+        Args:
+            labels (Tensor): Tensor of encoded labels.
+            seed (int): Random seed.
+        """
+        super().__init__()
+        self.labels = np.unique(labels.numpy())
+        random.seed(seed)
+        np.random.seed(seed)
+
+    def predict(self, dataset_test: Tensor) -> np.ndarray:
         """ Given a dataset_test, predicts the probabilities associated to the 
         provided images.
         
         Args:
-            dataset_test: Array of unlabelled image examples of shape 
-                (query_size x 128 x 128 x 3).
+            dataset_test (Tensor): Tensor of unlabelled image examples of shape 
+                [n_ways*query_size x 3 x 128 x 128].
         
         Returns:
             np.ndarray: Predicted probs for all images. The array must be of 
-                shape (query_size, N_ways).
+                shape [n_ways*query_size, n_ways].
         """
         random_pred = np.random.choice(self.labels, len(dataset_test))
+        # Mimic prediction probabilities
         random_probs = np.zeros((random_pred.size, len(self.labels)))
         random_probs[np.arange(random_pred.size), random_pred] = 1
         return random_probs
-
