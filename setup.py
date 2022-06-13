@@ -5,4 +5,3 @@ setup(name="cdmetadl",
       packages=["cdmetadl"],
       description="Package with all functions for Cross-Domain MetaDL competition",
       url="https://github.com/DustinCarrion/cd-metadl")
-
