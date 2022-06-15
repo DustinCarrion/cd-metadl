@@ -13,6 +13,8 @@ from cdmetadl.ingestion.data_generator import Task
 from cdmetadl.api.api import MetaLearner, Learner, Predictor
 
 SEED = 98
+random.seed(SEED)
+np.random.seed(SEED)
 
 class MyMetaLearner(MetaLearner):
 
@@ -28,7 +30,6 @@ class MyMetaLearner(MetaLearner):
                 to the total number of classes across all training datasets.
         """
         super().__init__(train_classes)
-        self.seed = SEED
 
     def meta_fit(self, 
                  meta_train_generator: Iterable[Any], 
@@ -49,19 +50,15 @@ class MyMetaLearner(MetaLearner):
             Learner: Resulting learner ready to be trained and evaluated on new
                 unseen tasks.
         """
-        return MyLearner(self.seed)
+        return MyLearner()
 
 
 class MyLearner(Learner):
 
-    def __init__(self, seed: int = 0) -> None:
+    def __init__(self) -> None:
         """ Defines the learner initialization.
-
-        Args:
-            seed (int, optional): Random seed. Defaults to 0.
         """
         super().__init__()
-        self.seed = seed
 
     def fit(self, dataset_train: Tuple[Tensor, Tensor, int, int]) -> Predictor:
         """ Fit the Learner to the support set of a new unseen task. 
@@ -80,7 +77,7 @@ class MyLearner(Learner):
                 query image examples from new unseen tasks.
         """
         _, y_train, _, _ = dataset_train
-        return MyPredictor(y_train, self.seed)
+        return MyPredictor(y_train)
 
     def save(self, path_to_save: str) -> None:
         """ Saves the learning object associated to the Learner. 
@@ -110,24 +107,19 @@ class MyLearner(Learner):
         if os.path.isfile(model_file):
             with open(model_file, "rb") as f:
                 saved_learner = pickle.load(f)
-            self.seed = saved_learner.seed
+            self = saved_learner
         
     
 class MyPredictor(Predictor):
 
-    def __init__(self, 
-                 labels: Tensor, 
-                 seed: int) -> None:
+    def __init__(self, labels: Tensor) -> None:
         """ Defines the Predictor initialization.
 
         Args:
             labels (Tensor): Tensor of encoded labels.
-            seed (int): Random seed.
         """
         super().__init__()
         self.labels = np.unique(labels.numpy())
-        random.seed(seed)
-        np.random.seed(seed)
 
     def predict(self, dataset_test: Tensor) -> np.ndarray:
         """ Given a dataset_test, predicts the probabilities associated to the 
