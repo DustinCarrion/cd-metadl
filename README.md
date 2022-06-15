@@ -8,7 +8,7 @@ This repository contains the code associated to the Cross-Domain MetaDL challeng
 - Felix Mohr (U. de La Sabana, Colombia)
 - Manh Hung Nguyen (ChaLearn, USA)
 
-[CodaLab competition link](https://codalab.lisn.upsaclay.fr/competitions/3627?secret_key=2d7c4b66-afa5-4c15-92cb-552f8187245c)
+[CodaLab competition link](https://codalab.lisn.upsaclay.fr/competitions/3627)
 
 ## Outline 
 [I - Overview](#i---overview)
