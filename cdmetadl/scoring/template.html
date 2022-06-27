@@ -178,7 +178,6 @@
                 <th>Task</th>
                 <th>Dataset</th>
                 <th>Number of ways</th>
-                <th>Original classes</th>
                 <th>Number of shots</th>
                 {% for score in scores_names %}
                 <th>{{score}}</th>
@@ -189,10 +188,6 @@
                 <td>{{ loop.index0 + 1 }}</td>
                 <td>{{task['dataset']}}</td>
                 <td>{{task['num_ways']}}</td>
-                <td>
-                    {% for class_ in task['classes'] %} {{class_}}
-                    <br> {% endfor %}
-                </td>
                 <td>{{task['num_shots']}}</td>
                 {% for score_val in task['scores'] %}
                 <td>{{score_val}}</td>

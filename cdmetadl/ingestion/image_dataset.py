@@ -3,7 +3,7 @@ Additionally, it provides the data in Pytorch Tensor format.
 
 AS A PARTICIPANT, DO NOT MODIFY THIS CODE.
 """
-import os.path 
+import os
 import pandas as pd
 import numpy as np
 from PIL import Image

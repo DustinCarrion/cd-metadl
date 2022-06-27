@@ -2,7 +2,6 @@
 
 AS A PARTICIPANT, DO NOT MODIFY THIS CODE.
 """
-import os
 import base64
 import numpy as np
 import pandas as pd
@@ -19,25 +18,11 @@ from typing import Tuple, Callable
 # ========================= SCORE RELATED HELPERS =============================
 # =============================================================================
 
-def create_path_here(file: str) -> str:
-    """ Create the absolute path of the specified file inside this directory.
-
-    Args:
-        file (str): File that needs a path.
-
-    Returns:
-        str: Absolute path to the specified file.
-    """
-    curr_dir_path = os.path.dirname(os.path.realpath(__file__))
-    return os.path.join(curr_dir_path, file)
-
-
-def read_results_file(file: str, dtype) -> np.ndarray:
+def read_results_file(file: str) -> np.ndarray:
     """ Read the results of the ingestion program, ground truth or predictions.
 
     Args:
         file (str): Path to the results file.
-        dtype: Data type of the data inside the file.
 
     Raises:
         Exception: Error raised when the results file cannot be opened.
@@ -46,14 +31,22 @@ def read_results_file(file: str, dtype) -> np.ndarray:
         np.ndarray: Array of data of the results file.
     """
     try:
-        return np.loadtxt(file, dtype=dtype)
+        results = np.loadtxt(file, dtype=float)
+        if len(results.shape) == 2:
+            return results
+        results = np.loadtxt(file, dtype=int)
+        return results
     except:
         raise Exception(f"In read_results_file, file '{file}' could not be "
             + f"opened")
     
 
-def get_score() -> Tuple[str, Callable[[np.ndarray, np.ndarray], float]]:
+def get_score(score_file_path: str) -> Tuple[str, 
+        Callable[[np.ndarray, np.ndarray], float]]:
     """ Read the score that should be used to evaluate the submissions.
+
+    Args:
+        score_file_path (str): Path to the scores file.
 
     Raises:
         NotImplementedError: Error raised when the score is not implemented.
@@ -64,7 +57,7 @@ def get_score() -> Tuple[str, Callable[[np.ndarray, np.ndarray], float]]:
             is the implementation of the score.
     """
     # Read score
-    with open(create_path_here("scores.txt"), "r") as f:
+    with open(score_file_path, "r") as f:
         score_name = f.readline().strip()
 
     # Find score implementation
@@ -207,6 +200,35 @@ def create_heatmap(data: dict,
 # ============================== SCORE FUNCTIONS ==============================
 # =============================================================================
 
+def normalized_accuracy(y_true: np.ndarray, 
+                        y_pred: np.ndarray,
+                        num_ways: int) -> float:
+    """ Compute the normalized accuracy of the given predictions regarding the 
+    number of ways.
+
+    Args:
+        y_true (np.ndarray): Ground truth labels.
+        y_pred (np.ndarray): Predicted labels.
+        num_ways (int): Number of ways.
+
+    Raises:
+        Exception: Exception raised when the normalized accuracy cannot be 
+            computed.
+
+    Returns:
+        float: Normalized accuracy of the predictions.
+    """
+    if len(y_pred.shape) == 2:
+        y_pred = np.argmax(y_pred, axis=1)
+    try:
+        bac = recall_score(y_true, y_pred, average = "macro", zero_division=0)
+        base_bac = 1/num_ways # random guessing
+        return (bac - base_bac) / (1 - base_bac)
+    except Exception as e:
+        raise Exception(f"In normalized_accuracy, score cannot be computed. "
+            + f"Detailed error: {repr(e)}")
+        
+
 def accuracy(y_true: np.ndarray, 
              y_pred: np.ndarray) -> float:
     """ Compute the accuracy of the given predictions.
@@ -221,7 +243,8 @@ def accuracy(y_true: np.ndarray,
     Returns:
         float: Accuracy of the predictions.
     """
-    y_pred = np.argmax(y_pred, axis=1)
+    if len(y_pred.shape) == 2:
+        y_pred = np.argmax(y_pred, axis=1)
     try:
         return accuracy_score(y_true, y_pred)
     except Exception as e:
@@ -244,7 +267,8 @@ def macro_f1_score(y_true: np.ndarray,
     Returns:
         float: Macro averaged f1 score of the predictions.
     """
-    y_pred = np.argmax(y_pred, axis=1)
+    if len(y_pred.shape) == 2:
+        y_pred = np.argmax(y_pred, axis=1)
     try:
         return f1_score(y_true, y_pred, average = "macro", zero_division = 0)
     except Exception as e:
@@ -267,7 +291,8 @@ def macro_precision(y_true: np.ndarray,
     Returns:
         float: Macro averaged precision of the predictions.
     """
-    y_pred = np.argmax(y_pred, axis=1)
+    if len(y_pred.shape) == 2:
+        y_pred = np.argmax(y_pred, axis=1)
     try:
         return precision_score(y_true, y_pred, average = "macro", 
             zero_division = 0)
@@ -291,7 +316,8 @@ def macro_recall(y_true: np.ndarray,
     Returns:
         float: Macro averaged recall of the predictions.
     """
-    y_pred = np.argmax(y_pred, axis=1)
+    if len(y_pred.shape) == 2:
+        y_pred = np.argmax(y_pred, axis=1)
     try:
         return recall_score(y_true, y_pred, average = "macro", 
             zero_division = 0)
@@ -301,25 +327,37 @@ def macro_recall(y_true: np.ndarray,
 
 
 def compute_all_scores(y_true: np.ndarray, 
-                       y_pred: np.ndarray) -> dict:
-    """ Computes the accuracy, macro averaged f1 score, macro averaged 
-    precision and macro averaged recall of the given predictions.
+                       y_pred: np.ndarray,
+                       num_ways: int,
+                       batch: bool = False) -> dict:
+    """ Computes the normalized accuracy, accuracy, macro averaged f1 score,
+    macro averaged precision and macro averaged recall of the given predictions
 
     Args:
         y_true (np.ndarray): Ground truth labels.
         y_pred (np.ndarray): Predicted labels.
+        num_ways (int): Number of ways.
+        batch (bool): Boolean flag to indicate that the current data belongs to 
+            a batch instead of a task. Defaults to False.
 
     Returns:
         dict: Dictionary with all the scores.
     """
     scoring = {
+        "Normalized Accuracy": normalized_accuracy,
         "Accuracy": accuracy,
         "Macro F1 Score": macro_f1_score,
         "Macro Precision": macro_precision,
         "Macro Recall": macro_recall
     }
+    if batch:
+        del scoring["Normalized Accuracy"]
+        
     scores = dict()
     for key in scoring.keys():
         scoring_function = scoring[key]
-        scores[key] = scoring_function(y_true, y_pred)
+        if key == "Normalized Accuracy":
+            scores[key] = scoring_function(y_true, y_pred, num_ways)
+        else:
+            scores[key] = scoring_function(y_true, y_pred)
     return scores

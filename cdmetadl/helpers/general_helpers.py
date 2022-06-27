@@ -70,8 +70,7 @@ def print_list(lst: List[str]) -> None:
         
         
 def show_dir(dir: str = ".") -> None:
-    """ Shows all the files and directories inside the specified directory up 
-    to the fourth level deep.
+    """ Shows all the files and directories inside the specified directory.
 
     Args:
         dir (str, optional): Source directory to be listed. Defaults to '.'.
@@ -80,8 +79,6 @@ def show_dir(dir: str = ".") -> None:
     print_list(ls(dir))
     print_list(ls(dir + '/*'))
     print_list(ls(dir + '/*/*'))
-    print_list(ls(dir + '/*/*/*'))
-    print_list(ls(dir + '/*/*/*/*'))        
         
         
 def mvdir(source: str, 

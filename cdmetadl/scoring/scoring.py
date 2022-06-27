@@ -5,6 +5,7 @@ Usage:
 
 python -m cdmetadl.scoring.scoring \
     --results_dir=output_dir_ingestion \
+    --input_data_dir=input_dir \
     --output_dir_scoring=output_dir
 
 * The results directory output_dir_ingestion (e.g. ../../ingestion_output) must
@@ -13,6 +14,10 @@ following files:
     metadata_ingestion
     experimental_settings.txt
 	task_{task_id}.predict
+ 
+* The input directory input_dir (e.g. ../../public_data) contains several 
+datasets formatted following this instructions: 
+https://github.com/ihsaan-ullah/meta-album/tree/master/DataFormat
 
 * The output directory output_dir (e.g. ../../scoring_output) will store the 
 computed scores
@@ -137,7 +142,8 @@ def scoring(argv) -> None:
     vprint("[+] Data generator", VERBOSE)
     
     vprint("\nChecking ingestion output...", VERBOSE)
-    number_of_tasks = len(os.listdir(results_dir)) - 2
+    result_files = os.listdir(results_dir)
+    number_of_tasks = sum(".predict" in file for file in result_files)
     if number_of_tasks != len(test_datasets) * TEST_TASKS_PER_DATASET: 
         print(f"[-] There are no enough results in {results_dir}")
         exit(1)
@@ -148,9 +154,13 @@ def scoring(argv) -> None:
     # Compute the score for each task
     if DEBUG_MODE < 1:
         # Read metric and count the number of tasks
-        score_name, scoring_function = get_score()
+        curr_dir_path = os.path.dirname(os.path.realpath(__file__))
+        score_file = os.path.join(curr_dir_path, "scores.txt")
+        score_name, scoring_function = get_score(score_file)
+        main_score = score_name
         vprint(f"\tUsing score: {score_name}", VERBOSE)
     else:
+        main_score = "Normalized Accuracy"
         vprint(f"\tUsing scores: Accuracy, Macro F1 Score, Macro Precision, "
             + f"Macro Recall", VERBOSE)
         
@@ -170,15 +180,18 @@ def scoring(argv) -> None:
         
         # Load ground truth and predicted labels
         task_name = f"{results_dir}/task_{i+1}"
-        y_pred = read_results_file(f"{task_name}.predict", float)
+        y_pred = read_results_file(f"{task_name}.predict")
         vprint("\t\t[+] Information loaded", VERBOSE)
     
         # Compute and store the scores
         if DEBUG_MODE < 1:
-            task_scores = scoring_function(y_true, y_pred)
+            if score_name == "Normalized Accuracy":
+                task_scores = scoring_function(y_true, y_pred, task_ways)
+            else:
+                task_scores = scoring_function(y_true, y_pred)
             task_scores = {score_name: task_scores}
         else:
-            task_scores = compute_all_scores(y_true, y_pred)
+            task_scores = compute_all_scores(y_true, y_pred, task_ways)
         keys = list(task_scores.keys())
         vprint("\t\t[+] Score(s) computed", VERBOSE)
         
@@ -241,7 +254,7 @@ def scoring(argv) -> None:
             for i, score_name in enumerate(scores_names):
                 overall_score, overall_ci = mean_confidence_interval(scores[
                     score_name])
-                if score_name == "Accuracy":
+                if score_name == main_score:
                     score_file.write(f"overall_score: {overall_score}\n")
                 else:
                     score_file.write(f"overall_{scores_names_to_save[i]}: "
@@ -269,7 +282,7 @@ def scoring(argv) -> None:
                 for j, score_name in enumerate(scores_names):
                     curr_info = scores_per_dataset[dataset][score_name]
                     score, conf_int = mean_confidence_interval(curr_info)
-                    if score_name == "Accuracy":
+                    if score_name == main_score:
                         score_file.write(f"dataset_{i+1}: {score}\n")
                     else:
                         score_file.write(f"dataset_{i+1}_"+ 
@@ -374,7 +387,7 @@ def scoring(argv) -> None:
             tasks=tasks
         )
 
-        html_file = os.path.join(output_dir, "scores.html")
+        html_file = os.path.join(output_dir, "detailed_results.html")
         with open(html_file, 'w', encoding="utf-8") as f: 
             f.write(subs)    
     except Exception as e:
@@ -383,6 +396,9 @@ def scoring(argv) -> None:
     
     vprint(f"\n{'#'*60}\n{'#'*10} Scoring program finished successfully "
         + f"{'#'*11}\n{'#'*60}\n", VERBOSE)
+    
+    print("Your detailed results are available in this file: "
+          + f"{FLAGS.output_dir_scoring}/detailed_results.html")
 
 
 if __name__ == "__main__":

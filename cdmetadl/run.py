@@ -25,7 +25,7 @@ flags.DEFINE_integer("debug_mode", 1, "Debug mode.")
 
 flags.DEFINE_integer("image_size", 128, "Image size.")
 
-flags.DEFINE_integer("max_time", 10, 
+flags.DEFINE_integer("max_time", 1000, 
     "Maximum time in seconds per testing task.")
 
 flags.DEFINE_boolean("overwrite_previous_results", False, 

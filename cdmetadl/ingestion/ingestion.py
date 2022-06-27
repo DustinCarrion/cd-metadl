@@ -13,11 +13,12 @@ datasets formatted following this instructions:
 https://github.com/ihsaan-ullah/meta-album/tree/master/DataFormat
 
 * The output directory output_dir (e.g. ../../ingestion_output) will store 
-the predicted labels of the meta-testing phase, the metadata, and the 
-experimental settings of the execution (no subdirectories):
-    metadata_ingestion
-    experimental_settings.txt
-	task_{task_id}.predict
+the predicted labels of the meta-testing phase, the metadata, the meta-trained 
+learner, and the logs:
+    logs/                   <- Directory containing all the meta-training logs
+    model/                  <- Meta-trained learner (Output of Learner.save())
+    metadata_ingestion      <- Metadata from the ingestion program
+	task_{task_id}.predict  <- Predicter probabilities for each meta-test task
 
 * The code directory submission_dir (e.g. ../../baselines/random) must 
 contain your code submission model.py, it can also contain other helpers and
@@ -37,6 +38,7 @@ from cdmetadl.helpers.ingestion_helpers import *
 from cdmetadl.helpers.general_helpers import *
 from cdmetadl.ingestion.image_dataset import ImageDataset, create_datasets
 from cdmetadl.ingestion.data_generator import CompetitionDataLoader
+from cdmetadl.ingestion.competition_logger import Logger
 
 
 # =============================== BEGIN OPTIONS =============================== 
@@ -54,8 +56,9 @@ flags.DEFINE_boolean("verbose", True, "Verbose mode.")
 # Debug mode
 # 0: no debug
 # 1: run the code normally, but limits the time to MAX_TIME (recommended value)
-# 2: same as 1 + show the Python version and list the directories 
-flags.DEFINE_integer("debug_mode", 1, "Debug mode.")
+# 2: same as 1 + list the directories 
+# 3: same as 2, but it checks if PyTorch recognizes the GPU (Only for debug)
+flags.DEFINE_integer("debug_mode", 0, "Debug mode.")
 
 # Image size
 # Int specifying the image size for all generators (recommended value 128)
@@ -69,11 +72,11 @@ flags.DEFINE_boolean("overwrite_previous_results", False,
 
 # Time budget
 # Maximum time in seconds PER TESTING TASK
-flags.DEFINE_integer("max_time", 10, "Max time in seconds per test task.") 
+flags.DEFINE_integer("max_time", 1000, "Max time in seconds per test task.") 
 
 # Tesk tasks per dataset
 # The total number of test tasks will be num_datasets x test_tasks_per_dataset
-flags.DEFINE_integer("test_tasks_per_dataset", 100, 
+flags.DEFINE_integer("test_tasks_per_dataset", 100,
     "Number of test tasks per dataset.")
 
 # Default location of directories
@@ -114,12 +117,28 @@ def ingestion(argv) -> None:
     submission_dir = os.path.abspath(FLAGS.submission_dir)
         
     # Show python version and directory structure
+    print(f"\nPython version: {version}")
+    print("\n\n")
+    os.system("nvidia-smi")
+    print("\n\n")
+    os.system("nvcc --version")
+    print("\n\n")
+    os.system("pip list")
+    print("\n\n")
+    
     if DEBUG_MODE >= 2: 
-        print(f"\nPython version: {version}")
         print(f"Using input_dir: {input_dir}")
         print(f"Using output_dir: {output_dir}")
         print(f"Using submission_dir: {submission_dir}")
         show_dir(".")
+    
+    if DEBUG_MODE == 3:
+        join_list = lambda info: "\n".join(info)
+        gpu_settings = ["\n----- GPU settings -----"]
+        gpu_info = get_torch_gpu_environment()
+        gpu_settings.extend(gpu_info)
+        print(join_list(gpu_settings))
+        exit(0)
         
     # Import your model
     path.insert(1, submission_dir)
@@ -209,12 +228,14 @@ def ingestion(argv) -> None:
     # Initialize genetators
     vprint("\nInitializing data generators...", VERBOSE)
     # Train generator
-    num_train_classes = train_generator_config["N"]
     if train_data_format == "task":
         train_datasets = create_datasets(train_datasets_info, IMG_SIZE)
         train_loader = CompetitionDataLoader(datasets=train_datasets, 
             episodes_config=train_generator_config, seed=SEED, verbose=VERBOSE)
         meta_train_generator = train_loader.generator
+        train_classes = train_generator_config["N"]
+        total_classes = sum([len(dataset.idx_per_label) for dataset in 
+            train_datasets])
     else:
         g = torch.Generator()
         g.manual_seed(SEED)
@@ -222,7 +243,8 @@ def ingestion(argv) -> None:
         meta_train_generator = lambda batches: iter(cycle(batches, 
             DataLoader(dataset=train_dataset, batch_size=batch_size, 
             shuffle=True, num_workers=2, generator=g)))
-        num_train_classes = len(train_dataset.idx_per_label)
+        train_classes = len(train_dataset.idx_per_label)
+        total_classes = train_classes
     vprint("\t[+] Train generator", VERBOSE)
     
     # Valid generator
@@ -252,6 +274,15 @@ def ingestion(argv) -> None:
         mvdir(output_dir, f"{output_dir}_{timestamp}") 
     mkdir(output_dir) 
     
+    # Create logs dir and initialize logger
+    logs_dir = f"{output_dir}/logs"
+    mkdir(logs_dir)
+    logger = Logger(logs_dir)
+
+    # Create output model dir
+    model_dir = f"{output_dir}/model"
+    mkdir(model_dir)
+    
     # Save/print experimental settings
     join_list = lambda info: "\n".join(info)
     
@@ -273,6 +304,8 @@ def ingestion(argv) -> None:
             "\n----- Train settings -----",
             f"Train data format: {train_data_format}",
             f"N-way: {train_loader.n_way}",
+            f"Minimum ways: {train_loader.min_ways}",
+            f"Maximum ways: {train_loader.max_ways}",
             f"k-shot: {train_loader.k_shot}",
             f"Minimum shots: {train_loader.min_shots}",
             f"Maximum shots: {train_loader.max_shots}",
@@ -330,17 +363,17 @@ def ingestion(argv) -> None:
 
     experimental_settings = join_list(all_settings)
     vprint(experimental_settings, VERBOSE)
-    experimental_settings_file = f"{output_dir}/experimental_settings.txt"
+    experimental_settings_file = f"{logs_dir}/experimental_settings.txt"
     with open(experimental_settings_file, "w") as f:
         f.writelines(experimental_settings)
 
     # Meta-train
     vprint("\nMeta-training your meta-learner...", VERBOSE)
     meta_training_start = time.time()
-    meta_learner = MyMetaLearner(num_train_classes)
+    meta_learner = MyMetaLearner(train_classes, total_classes, logger)
     learner = meta_learner.meta_fit(meta_train_generator, meta_valid_generator)
     meta_training_time = time.time() - meta_training_start
-    learner.save(submission_dir)
+    learner.save(model_dir)
     vprint("[+] Meta-learner meta-trained", VERBOSE)
     
     # Meta-test
@@ -349,13 +382,13 @@ def ingestion(argv) -> None:
     for i, task in enumerate(meta_test_generator(TEST_TASKS_PER_DATASET)):
         vprint(f"\tTask {i+1} started...", VERBOSE)
         learner = MyLearner() 
-        learner.load(submission_dir)   
+        learner.load(model_dir)   
 
-        dataset_train = (task.support_set[0], task.support_set[1], 
-            task.num_ways, task.num_shots)
+        support_set = (task.support_set[0], task.support_set[1], 
+            task.support_set[2], task.num_ways, task.num_shots)
         
         task_start = time.time()
-        predictor = learner.fit(dataset_train)
+        predictor = learner.fit(support_set)
         vprint("\t\t[+] Learner trained", VERBOSE)
         
         y_pred = predictor.predict(task.query_set[0])
@@ -369,7 +402,8 @@ def ingestion(argv) -> None:
                 exit(1)
         
         file_name = f"{output_dir}/task_{i+1}"
-        np.savetxt(f"{file_name}.predict", y_pred, fmt='%f')
+        fmt = "%f" if len(y_pred.shape) == 2 else "%d"
+        np.savetxt(f"{file_name}.predict", y_pred, fmt=fmt)
         vprint("\t\t[+] Predictions saved", VERBOSE)
         
         vprint(f"\t[+] Task {i+1} finished in {task_time} seconds", VERBOSE)   

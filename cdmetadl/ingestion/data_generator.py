@@ -14,7 +14,7 @@ from cdmetadl.ingestion.image_dataset import ImageDataset
 # Custom dtypes
 TASK_DATA = Tuple[int, int, torch.Tensor, torch.Tensor, torch.Tensor, 
     torch.Tensor, np.ndarray]
-SET_DATA = Tuple[torch.Tensor, torch.Tensor]
+SET_DATA = Tuple[torch.Tensor, torch.Tensor, torch.Tensor]
 RAND_GENERATOR = np.random.mtrand.RandomState
 
 
@@ -35,17 +35,20 @@ class Task:
             num_shots (int): Number of shots (images per class) for the support 
                 set.
             support_set (SET_DATA): Support set for the current task. The 
-                format of the set is (torch.Tensor, torch.Tensor), where the 
-                first tensor corresponds to the images with a shape of 
-                [num_ways*num_shots x 3 x 128 x 128] while the second tensor 
+                format of the set is (torch.Tensor, torch.Tensor, torch.Tensor)
+                where the first tensor corresponds to the images with a shape 
+                of [num_ways*num_shots x 3 x 128 x 128]. The second tensor 
                 corresponds to the labels with a shape of [num_ways*num_shots].
+                The last tensor corresponds to the original labels with a shape 
+                of [num_ways*num_shots].
             query_set (SET_DATA): Query set for the current task. The format
-                of the set is (torch.Tensor, torch.Tensor), where the first 
-                tensor corresponds to the images with a shape of 
-                [num_ways*query_size x 3 x 128 x 128] while the second tensor 
+                of the set is (torch.Tensor, torch.Tensor, torch.Tensor), where 
+                the first tensor corresponds to the images with a shape of 
+                [num_ways*query_size x 3 x 128 x 128]. The second tensor 
                 corresponds to the labels with a shape of [num_ways*query_size]
-                The query_size can vary depending on the configuration of the
-                data loader.
+                and the last tensor corresponds to the original labels with a 
+                shape of [num_ways*num_shots]. The query_size can vary 
+                depending on the configuration of the data loader.
             original_class_idx (np.ndarray): Array with the original class 
                 indexes used in the current task, its shape is [num_ways, ].
             dataset (str, optional): Name of the dataset used to create the 
@@ -243,13 +246,15 @@ class CompetitionDataLoader:
                     dataset_name = f"Dataset {dataset_idx+1}"
                     
                 # Create support and query sets
-                (n_way, k_shot, support_x, support_y, query_x, query_y, 
-                 original_labels_idx) = self.create_support_and_query_sets(
+                (n_way, k_shot, support_x, support_y, support_original_y,
+                 query_x, query_y, query_original_y, 
+                 unique_labels_idx) = self.create_support_and_query_sets(
                      random_gen, dataset)
                 
                 # Return the task
-                task = Task(n_way, k_shot, (support_x, support_y), 
-                    (query_x, query_y), original_labels_idx, dataset_name)
+                task = Task(n_way, k_shot, (support_x, support_y, 
+                    support_original_y), (query_x, query_y, query_original_y), 
+                    unique_labels_idx, dataset_name)
                 yield task        
         else:
             for dataset_idx in range(len(self.datasets)):
@@ -260,13 +265,15 @@ class CompetitionDataLoader:
                     dataset_name = f"Dataset {dataset_idx+1}"
                 for _ in range(num_tasks):
                     # Create support and query sets
-                    (n_way, k_shot, support_x, support_y, query_x, query_y, 
-                    original_labels_idx) = self.create_support_and_query_sets(
-                        random_gen, dataset)
+                    (n_way, k_shot, support_x, support_y, support_original_y,
+                     query_x, query_y, query_original_y, 
+                     unique_labels_idx) = self.create_support_and_query_sets(
+                         random_gen, dataset)
 
                     # Return the task
-                    task = Task(n_way, k_shot, (support_x, support_y), 
-                        (query_x, query_y), original_labels_idx, dataset_name)
+                    task = Task(n_way, k_shot, (support_x, support_y, 
+                        support_original_y), (query_x, query_y, 
+                        query_original_y), unique_labels_idx, dataset_name)
                     yield task    
        
     def create_support_and_query_sets(self,
@@ -314,22 +321,27 @@ class CompetitionDataLoader:
         data = torch.stack(data)
         labels = torch.arange(n_way).repeat((
             n_way * total_examples_per_class)//n_way).long()
-        original_labels_idx = torch.stack(original_labels_idx).numpy()[:n_way]
+        original_labels_idx = torch.stack(original_labels_idx).long()
+        unique_labels_idx = original_labels_idx.numpy()[:n_way]
         
         # Split support and query sets
-        support_x, support_y, query_x, query_y = (data[:support_size], 
-            labels[:support_size], data[support_size:], 
-            labels[support_size:])  
+        (support_x, support_y, support_original_y, 
+         query_x, query_y, query_original_y) = (data[:support_size], 
+            labels[:support_size], original_labels_idx[:support_size], 
+            data[support_size:], labels[support_size:], 
+            original_labels_idx[support_size:])  
         
         shuffle_support = random_gen.permutation(support_size) 
         support_x = support_x[shuffle_support]
         support_y = support_y[shuffle_support]
+        support_original_y = support_original_y[shuffle_support]
         shuffle_query = random_gen.permutation(len(query_x)) 
         query_x = query_x[shuffle_query]
         query_y = query_y[shuffle_query]
+        query_original_y = query_original_y[shuffle_query]
         
-        return n_way, k_shot, support_x, support_y, query_x, query_y, \
-            original_labels_idx
+        return n_way, k_shot, support_x, support_y, support_original_y, \
+            query_x, query_y, query_original_y, unique_labels_idx
              
     def prepare_task_config(self, 
                             random_gen: RAND_GENERATOR,

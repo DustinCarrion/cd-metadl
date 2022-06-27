@@ -8,7 +8,6 @@
 # Data
 *.zip
 public_data/
-codalab/
 ingestion_output*
 scoring_output*
 
