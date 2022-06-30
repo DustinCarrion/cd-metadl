@@ -41,8 +41,10 @@ Each notebook level includes information of previous levels.
 - [2] - [O. Vinyals et al. **Matching Networks for One Shot Learning** -- 2017](https://arxiv.org/pdf/1606.04080)
 - [3] - [C. Finn et al. **Model-Agnostic Meta-Learning for Fast Adaptation of Deep Networks** -- 2017](https://arxiv.org/pdf/1703.03400)
 - [4] - [E. Triantafillou et al. **Meta-Dataset: A Dataset of Datasets for Learning to Learn from Few Examples** -- 2019](https://arxiv.org/pdf/1903.03096)
-- [5] - [A. El Baz et al. **Lessons learned from the NeurIPS 2021 MetaDL challenge: Backbone fine-tuning without episodic meta-learning dominates for few-shot learning image classification** -- 2022](https://hal.archives-ouvertes.fr/hal-03688638)
-- [6] - [I. Ullah et al. **Meta-Album: Multi-domain Meta-Dataset for Few-Shot Image Classification** -- 2022](https://meta-album.github.io/paper.html)
+- [5] - [Chen et al. **MetaDelta: A Meta-Learning System for Few-shot Image Classification** -- 2021](https://arxiv.org/pdf/2102.10744)
+- [6] - [A. El Baz et al. **Lessons learned from the NeurIPS 2021 MetaDL challenge: Backbone fine-tuning without episodic meta-learning dominates for few-shot learning image classification** -- 2022](https://hal.archives-ouvertes.fr/hal-03688638)
+- [7] - [I. Ullah et al. **Meta-Album: Multi-domain Meta-Dataset for Few-Shot Image Classification** -- 2022](https://meta-album.github.io/paper.html)
+
 
 ### Disclamer
 Some methods in the `tutorial_utils.py` (*e.g.*, plot_task()) are inspired by the introduction notebook of [E. Triantafillou et al. **Meta-Dataset: GitHub repository**](https://github.com/google-research/meta-dataset).
