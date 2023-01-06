@@ -70,9 +70,18 @@ class MyMetaLearner(MetaLearner):
         # - self.log (function) See the above description for details
         super().__init__(train_classes, total_classes, logger)
         
+        # in order to match the number of seen examples in a meta_fit call with 
+        # the finetuning baseline, then we need to ensure that:
+        # (finetuning_episodic) train_batch_size * T_train * train_tasks \
+        #                       == (finetuning) train_batches * batch_size
+        # furthermore, we'd better have: 
+        #   (finetuning_episodic) train_batch_size == (finetuning) batch_size
+        
         # General data parameters
         self.should_train = True
-        self.train_batches = 20
+        self.train_batch_size = 16
+        self.T_train = 2
+        self.train_tasks = 10
         self.val_tasks = 10
         self.val_after = 5
         
@@ -80,7 +89,7 @@ class MyMetaLearner(MetaLearner):
         self.dev = self.get_device()
         self.opt_fn = torch.optim.Adam
         self.model_args = {
-            "num_classes": self.train_classes, 
+            "num_classes": self.total_classes,
             "dev": self.dev, 
             "num_blocks": 18, 
             "pretrained": False 
@@ -126,18 +135,28 @@ class MyMetaLearner(MetaLearner):
                 unseen tasks.
         """
         if self.should_train:
-            for i, batch in enumerate(meta_train_generator(self.train_batches)):
+            for i, task in enumerate(meta_train_generator(self.train_tasks)):
+                
                 # Prepare data
-                X_train, y_train = batch
-                X_train = X_train.to(self.dev)
-                y_train = y_train.view(-1).to(self.dev)
+                num_ways = task.num_ways
+                X_support, _, y_support = task.support_set
+                X_support, y_support = X_support.to(self.dev), y_support.to(self.dev)
+                X_query, _, y_query = task.query_set
+                X_query = X_query.to(self.dev)
                 
-                # Optimize metalearner
-                out, loss = optimize(self.meta_learner, self.optimizer, 
-                    X_train, y_train)
+                # both support set and query set are used to fine-tune
+                X_train = torch.cat([X_support, X_query], dim=0)
+                y_train = torch.cat([y_support, y_query], dim=0)
                 
-                # Log iteration
-                self.log(batch, out.detach().cpu().numpy(), loss)
+                # Optimize learner
+                for _ in range(self.T_train):
+                    X_batch, y_batch = get_batch_without_replacement(X_train, y_train,
+                                                 self.train_batch_size)
+                    out, loss = optimize(self.meta_learner, 
+                                         self.optimizer, X_batch, y_batch)
+                
+                    # Log iteration
+                    self.log((X_batch, y_batch), out.detach().cpu().numpy(), loss)
                 
                 if (i + 1) % self.val_after == 0:
                     self.meta_valid(meta_valid_generator)
@@ -371,3 +390,23 @@ class MyPredictor(Predictor):
             probs = F.softmax(out, dim=1).cpu().numpy()
         
         return probs
+
+
+def get_batch_without_replacement(X: torch.Tensor,
+                     y: torch.Tensor,
+                     batch_size: int) -> Tuple[torch.Tensor, torch.Tensor]:
+    """ Get a batch of the specified size from the specified data.
+
+    Args:
+        X (torch.Tensor): Images.
+        y (torch.Tensor): Labels.
+        batch_size (int): Desired batch size.
+
+    Returns:
+        Tuple[torch.Tensor, torch.Tensor]: Batch of the specified size.
+        
+    adapted from get_batch, in order to sample batches without replacement
+    """
+    batch_indices = np.random.choice(list(range(0, X.size()[0])), size=batch_size, replace=False)
+    X_batch, y_batch = X[batch_indices], y[batch_indices]
+    return X_batch, y_batch
