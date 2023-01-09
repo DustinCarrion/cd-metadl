@@ -74,7 +74,7 @@ class MyMetaLearner(MetaLearner):
         
         # General data parameters
         self.should_train = True
-        self.train_tasks = 20
+        self.train_batches = 20
         self.val_tasks = 10
         self.val_after = 5
         
@@ -84,6 +84,8 @@ class MyMetaLearner(MetaLearner):
         self.second_order = False
         self.meta_batch_size = 2
         self.T = 5
+        
+        self.support_size = 50 # should match the maml baseline to compare
         
         # General model parameters
         self.dev = self.get_device()
@@ -113,6 +115,23 @@ class MyMetaLearner(MetaLearner):
         self.best_state = None
         self.val_learner = ResNet(**self.model_args).to(self.dev)
 
+    def support_query_split(self, X_all, y_all, X_train_size):
+        # X_all: <class 'torch.Tensor'> torch.Size([150, 3, 128, 128]) torch.float32
+        # y_all: <class 'torch.Tensor'> torch.Size([150]) torch.int64
+        
+        support_indices = np.random.choice(
+            list(range(0, X_all.shape[0])), size=X_train_size, replace=False)
+        
+        query_indices = [xx for xx in list(
+            range(0, X_all.shape[0])) if xx not in support_indices]
+        
+        X_train = X_all[support_indices, :, :, :]
+        y_train = y_all[support_indices]
+        X_test = X_all[query_indices, :, :, :]
+        y_test = y_all[query_indices]
+        
+        return X_train, y_train, X_test, y_test
+
     def meta_fit(self, 
                  meta_train_generator: Iterable[Any], 
                  meta_valid_generator: Iterable[Any]) -> Learner:
@@ -135,14 +154,16 @@ class MyMetaLearner(MetaLearner):
         """
         if self.should_train:
             self.optimizer.zero_grad()
-            for i, task in enumerate(meta_train_generator(self.train_tasks)):
+            for i, batch in enumerate(meta_train_generator(self.train_batches)):
                 self.meta_learner.train()
                 
                 # Prepare data
-                X_train, y_train, _ = task.support_set
-                X_train, y_train = X_train.to(self.dev), y_train.to(self.dev)
-                X_test, y_test, _ = task.query_set
-                X_test, y_test = X_test.to(self.dev), y_test.to(self.dev)
+                X_all, y_all = batch
+                X_all = X_all.to(self.dev)
+                y_all = y_all.view(-1).to(self.dev)
+                
+                X_train, y_train, X_test, y_test = self.support_query_split(
+                    X_all, y_all, X_train_size=self.support_size)
                 
                 # Compute loss
                 task_weights = [p.clone() for p in self.weights]  
@@ -174,7 +195,8 @@ class MyMetaLearner(MetaLearner):
                     self.optimizer.zero_grad()
                 
                 # Log iteration
-                self.log(task, out.detach().cpu().numpy(), loss.item())
+                self.log((X_test, y_test),
+                         out.detach().cpu().numpy(), loss.item())
                 
                 if (i + 1) % self.val_after == 0:
                     self.meta_valid(meta_valid_generator)

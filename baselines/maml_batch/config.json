@@ -1,6 +1,6 @@
 {
     "train_data_format": "batch",
-    "batch_size": 16,
+    "batch_size": 150,
     "validation_datasets": 3,
     "valid_config": {
         "N": 5,
