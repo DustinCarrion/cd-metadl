@@ -197,11 +197,16 @@ class ResNet(nn.Module):
         x = self.flatten(x)
         return x
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, 
+                x: torch.Tensor,
+                embedding: bool = False) -> torch.Tensor:
         """ Forwards the input data through the model.
 
         Args:
             x (torch.Tensor): Input data.
+            embedding (bool, optional): Boolean flag to control the output. If 
+            True, the output before the output layer is returned, otherwise the
+            normal output is returned. Defaults to False.
 
         Returns:
             torch.Tensor: Output of the model.
@@ -214,6 +219,8 @@ class ResNet(nn.Module):
             x = self.model.features[i](x)
         x = F.adaptive_avg_pool2d(x, output_size=(1,1))
         x = self.flatten(x)
+        if embedding:
+            return x
         x = self.model.out(x)
         return x
 

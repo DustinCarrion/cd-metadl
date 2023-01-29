@@ -136,6 +136,7 @@ class MyLearner(Learner):
         self.batch_size = 4
         self.model_args = model_args
         self.model_state = model_state
+        self.ncc = False
 
     def fit(self, support_set: Tuple[torch.Tensor, torch.Tensor, torch.Tensor, 
                                int, int]) -> Predictor:
@@ -163,16 +164,31 @@ class MyLearner(Learner):
         self.learner.modify_out_layer(n_ways)
         optimizer = self.opt_fn(self.learner.parameters(), lr=self.lr)
 
-        # Sample T batches and make updates to the parameters 
-        for _ in range(self.T):        
-            X_batch, y_batch = self.get_batch(X_train, y_train,self.batch_size)
-            optimizer.zero_grad()
-            out = self.learner(X_batch)
-            loss = self.learner.criterion(out, y_batch)
-            loss.backward()
-            optimizer.step()
+        if self.ncc:
+            with torch.no_grad():
+                # Compute input embeddings
+                support_embeddings = self.learner(X_train, embedding=True)
+
+                # Compute prototypes
+                prototypes = torch.zeros((n_ways, support_embeddings.size(1)), 
+                    device=self.dev)
+                for i in range(n_ways):
+                    mask = y_train == i
+                    prototypes[i] = (support_embeddings[mask].sum(dim=0) / 
+                        torch.sum(mask).item())
+        else:
+            # Sample T batches and make updates to the parameters 
+            for _ in range(self.T):        
+                X_batch, y_batch = self.get_batch(X_train, y_train,
+                    self.batch_size)
+                optimizer.zero_grad()
+                out = self.learner(X_batch)
+                loss = self.learner.criterion(out, y_batch)
+                loss.backward()
+                optimizer.step()
+            prototypes = None
         
-        return MyPredictor(self.learner, self.dev)
+        return MyPredictor(self.learner, self.dev, prototypes)
 
     def save(self, path_to_save: str) -> None:
         """ Saves the learning object associated to the Learner. 
@@ -241,16 +257,19 @@ class MyPredictor(Predictor):
 
     def __init__(self, 
                  model: nn.Module, 
-                 dev: torch.device) -> None:
+                 dev: torch.device,
+                 prototypes: torch.Tensor) -> None:
         """ Defines the Predictor initialization.
 
         Args:
             model (nn.Module): Fitted learner. 
             dev (torch.device): Device where the data is located.
+            prototypes (torch.device): Support prototypes.
         """
         super().__init__()
         self.model = model
         self.dev = dev
+        self.prototypes = prototypes
 
     def predict(self, query_set: torch.Tensor) -> np.ndarray:
         """ Given a query_set, predicts the probabilities associated to the 
@@ -272,7 +291,16 @@ class MyPredictor(Predictor):
         """
         X_test = query_set.to(self.dev)
         with torch.no_grad():
-            out = self.model(X_test)
+            if self.prototypes is not None:
+                # Compute input embeddings
+                query_embeddings = self.model(X_test, embedding=True)
+
+                # Create distance matrix (negative predictions)
+                distance_matrix = (torch.cdist(query_embeddings.unsqueeze(0), 
+                    self.prototypes.unsqueeze(0))**2).squeeze(0) 
+                out = -1 * distance_matrix
+            else:
+                out = self.model(X_test)
             probs = F.softmax(out, dim=1).cpu().numpy()
         
         return probs
