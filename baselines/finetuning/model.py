@@ -245,10 +245,10 @@ class MyMetaLearner(MetaLearner):
         learning.
         """
         self.running_prototypes = torch.zeros((self.train_classes, 
-            self.meta_learner.in_features), device=self.get_device(), 
+            self.meta_learner.in_features), device=self.dev, 
             requires_grad=False)
-        self.running_lenght = torch.zeros(self.train_classes, 
-            device=self.get_device(), requires_grad=False)
+        self.running_lenght = torch.zeros(self.train_classes, device=self.dev, 
+            requires_grad=False)
 
     def get_device(self) -> torch.device:
         """ Get the current device, it can be CPU or GPU.
