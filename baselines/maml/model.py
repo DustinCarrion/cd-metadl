@@ -163,15 +163,15 @@ class MyMetaLearner(MetaLearner):
                                 +self.grad_clip)
                 
                 # Update gradient buffer
-                self.grad_buffer = [self.grad_buffer[i] + self.weights[i].grad 
-                    if self.weights[i].grad is not None else 
-                    self.grad_buffer[i] for i in range(len(self.weights))]
+                self.grad_buffer = [self.grad_buffer[j] + self.weights[j].grad 
+                    if self.weights[j].grad is not None else 
+                    self.grad_buffer[j] for j in range(len(self.weights))]
                 self.optimizer.zero_grad()
                 
                 # Optimize metalearner
                 if (i + 1) % self.meta_batch_size == 0: 
-                    for i, p in enumerate(self.weights):
-                        p.grad = self.grad_buffer[i]
+                    for j, p in enumerate(self.weights):
+                        p.grad = self.grad_buffer[j]
                     self.optimizer.step()
                     
                     self.grad_buffer = [torch.zeros(p.size(), device=self.dev) 
