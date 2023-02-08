@@ -74,6 +74,7 @@ class MyMetaLearner(MetaLearner):
         
         # General data parameters
         self.should_train = True
+        self.ncc = False
         self.train_batches = 20
         self.val_tasks = 10
         self.val_after = 5
@@ -110,27 +111,13 @@ class MyMetaLearner(MetaLearner):
         self.grad_buffer = [torch.zeros(p.size(), device=self.dev) for p in 
             self.weights]
         
+        # Initialize running prototypes
+        if self.ncc: self.init_prototypes()
+        
         # Validation-learner
         self.best_score = -float("inf")
         self.best_state = None
         self.val_learner = ResNet(**self.model_args).to(self.dev)
-
-    def support_query_split(self, X_all, y_all, X_train_size):
-        # X_all: <class 'torch.Tensor'> torch.Size([150, 3, 128, 128]) torch.float32
-        # y_all: <class 'torch.Tensor'> torch.Size([150]) torch.int64
-        
-        support_indices = np.random.choice(
-            list(range(0, X_all.shape[0])), size=X_train_size, replace=False)
-        
-        query_indices = [xx for xx in list(
-            range(0, X_all.shape[0])) if xx not in support_indices]
-        
-        X_train = X_all[support_indices, :, :, :]
-        y_train = y_all[support_indices]
-        X_test = X_all[query_indices, :, :, :]
-        y_test = y_all[query_indices]
-        
-        return X_train, y_train, X_test, y_test
 
     def meta_fit(self, 
                  meta_train_generator: Iterable[Any], 
@@ -158,48 +145,54 @@ class MyMetaLearner(MetaLearner):
                 self.meta_learner.train()
                 
                 # Prepare data
-                X_all, y_all = batch
-                X_all = X_all.to(self.dev)
-                y_all = y_all.view(-1).to(self.dev)
+                X, y = batch
+                X = X.to(self.dev)
+                y = y.view(-1).to(self.dev)
                 
-                X_train, y_train, X_test, y_test = self.support_query_split(
-                    X_all, y_all, X_train_size=self.support_size)
-                
-                # Compute loss
-                task_weights = [p.clone() for p in self.weights]  
-                out, loss = self.compute_out_and_loss(self.meta_learner, 
-                    task_weights, X_train, y_train, X_test, y_test, True)
-                
-                # Propagate loss
-                loss.backward()
-                
-                # Clip gradients
-                if self.grad_clip is not None:
-                    for p in self.weights:
-                        p.grad = torch.clamp(p.grad, -self.grad_clip, 
-                            +self.grad_clip)
-                
-                # Update gradient buffer
-                self.grad_buffer = [self.grad_buffer[i] + self.weights[i].grad 
-                    for i in range(len(self.weights))]
-                self.optimizer.zero_grad()
-                
-                # Optimize metalearner
-                if (i + 1) % self.meta_batch_size == 0: 
-                    for i, p in enumerate(self.weights):
-                        p.grad = self.grad_buffer[i]
-                    self.optimizer.step()
+                if self.ncc and 0 in self.running_lenght:
+                    self.update_prototypes(self.meta_learner, X, y)
                     
-                    self.grad_buffer = [torch.zeros(p.size(), device=self.dev) 
-                        for p in self.weights]
+                else:
+                    X_train, y_train, X_test, y_test = self.batch_to_task(X, y, 
+                        self.support_size)
+                    
+                    # Compute loss
+                    task_weights = [p.clone() for p in self.weights]  
+                    out, loss = self.compute_out_and_loss(self.meta_learner, 
+                        task_weights, X_train, y_train, X_test, y_test, True)
+                    
+                    # Propagate loss
+                    loss.backward()
+                    
+                    # Clip gradients
+                    if self.grad_clip is not None:
+                        for p in self.weights:
+                            if p.grad is not None:
+                                p.grad = torch.clamp(p.grad, -self.grad_clip, 
+                                    +self.grad_clip)
+                    
+                    # Update gradient buffer
+                    self.grad_buffer = [self.grad_buffer[j] + self.weights[j].grad 
+                        if self.weights[j].grad is not None else 
+                        self.grad_buffer[j] for j in range(len(self.weights))]
                     self.optimizer.zero_grad()
-                
-                # Log iteration
-                self.log((X_test, y_test),
-                         out.detach().cpu().numpy(), loss.item())
-                
-                if (i + 1) % self.val_after == 0:
-                    self.meta_valid(meta_valid_generator)
+                    
+                    # Optimize metalearner
+                    if (i + 1) % self.meta_batch_size == 0: 
+                        for j, p in enumerate(self.weights):
+                            p.grad = self.grad_buffer[j]
+                        self.optimizer.step()
+                        
+                        self.grad_buffer = [torch.zeros(p.size(), device=self.dev) 
+                            for p in self.weights]
+                        self.optimizer.zero_grad()
+                    
+                    # Log iteration
+                    self.log((X_test, y_test), out.detach().cpu().numpy(), 
+                        loss.item())
+                    
+                    if (i + 1) % self.val_after == 0:
+                        self.meta_valid(meta_valid_generator)
                     
         if self.best_state is None:
             self.best_state = [p.clone().detach() for p in self.weights]
@@ -208,7 +201,8 @@ class MyMetaLearner(MetaLearner):
             "lr": self.base_lr,
             "grad_clip": self.grad_clip,
             "second_order": self.second_order,
-            "T": self.T
+            "T": self.T,
+            "ncc": self.ncc
         }
         return MyLearner(self.model_args, self.meta_learner.state_dict(), 
             self.best_state, maml_params)
@@ -247,7 +241,7 @@ class MyMetaLearner(MetaLearner):
             
             # Evaluate learner
             out, _ = self.compute_out_and_loss(self.val_learner, task_weights, 
-                X_train, y_train, X_test, y_test, False, True)
+                X_train, y_train, X_test, y_test, False, True, num_ways)
             preds = torch.argmax(out, dim=1).cpu().numpy()
             
             # Log iteration
@@ -277,6 +271,100 @@ class MyMetaLearner(MetaLearner):
             print("Using CPU")
         return device
     
+    def init_prototypes(self) -> None:
+        """ Initialize the prototypes for the NCC classifier with batch 
+        learning.
+        """
+        self.running_prototypes = torch.zeros((self.train_classes, 
+            self.meta_learner.in_features), device=self.dev, 
+            requires_grad=False)
+        self.running_lenght = torch.zeros(self.train_classes, device=self.dev, 
+            requires_grad=False)
+
+    def update_prototypes(self, 
+                          model: nn.Module, 
+                          X: torch.Tensor, 
+                          y: torch.Tensor,
+                          weights: List[torch.Tensor] = None,
+                          grad: bool = False) -> Tuple[torch.Tensor, 
+                                                       torch.Tensor]:
+        """ Update the prototypes following the NCC strategy.
+
+        Args:
+            model (nn.Module): Model to be used.
+            X (torch.Tensor): Images.
+            y (torch.Tensor): Labels.
+            weights (List[torch.Tensor], optional): Weights to be used by the 
+                model. Defaults to None.
+            grad (bool, optional): Boolean flag to indicate if the grad should
+                be tracked.  
+                
+        Returns:
+            Tuple[torch.Tensor, torch.Tensor]: Running prototypes and lenght 
+                with gradient. It is only returned if the gradient is required.
+        """
+        if weights is None:
+            weights = self.weights
+            
+        if grad:
+            context = self.empty_context
+        else:
+            context = torch.no_grad
+
+        # Compute embeddings
+        with context():
+            current_embeddings = model.forward_weights(X, weights, 
+                embedding=True)
+            if grad:
+                no_grad_embeddings = current_embeddings.clone().detach()
+                grad_running_prototypes = self.running_prototypes.clone()
+                grad_running_lenght = self.running_lenght.clone()
+            else:
+                no_grad_embeddings = current_embeddings
+        
+            # Update prototypes
+            for i in range(self.train_classes):
+                mask = y == i
+                self.running_prototypes[i] += no_grad_embeddings[mask].sum(dim=0) 
+                self.running_lenght[i] += torch.sum(mask).item()
+                
+                if grad:
+                    grad_running_prototypes[i] += current_embeddings[mask].sum(dim=0) 
+                    grad_running_lenght[i] += torch.sum(mask).item()
+                    
+        if grad:
+            return grad_running_prototypes, grad_running_lenght
+
+    def batch_to_task(self,
+                      X: torch.Tensor, 
+                      y: torch.Tensor, 
+                      support_size: int) -> Tuple[torch.Tensor, torch.Tensor, 
+                                              torch.Tensor, torch.Tensor]:
+        """ Transform a batch into a task (support and query sets).
+
+        Args:
+            X (torch.Tensor): Images.
+            y (torch.Tensor): Labels.
+            support_size (int): Desired support size.
+
+        Returns:
+            Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]: 
+                Support images, support labels, query images, and query labels.
+        """
+        # Select support and query indices
+        all_indices = list(range(0, X.shape[0]))
+        support_indices = np.random.choice(all_indices, size=support_size, 
+            replace=False)
+        query_indices = [i for i in all_indices if i not in support_indices]
+
+        # Split batch into support and query sets
+        X_train = X[support_indices, :, :, :]
+        y_train = y[support_indices]
+        X_test = X[query_indices, :, :, :]
+        y_test = y[query_indices]
+
+        return X_train, y_train, X_test, y_test
+    
     def compute_out_and_loss(self,
                              model: nn.Module, 
                              weights: List[torch.Tensor], 
@@ -285,7 +373,8 @@ class MyMetaLearner(MetaLearner):
                              X_test: torch.Tensor, 
                              y_test: torch.Tensor,
                              training: bool, 
-                             no_loss: bool = False) -> Tuple[torch.Tensor, 
+                             no_loss: bool = False,
+                             num_classes: int = None) -> Tuple[torch.Tensor, 
                                                              torch.Tensor]:
         """ Compute the output and loss using the specified data.
 
@@ -302,17 +391,28 @@ class MyMetaLearner(MetaLearner):
             no_loss (bool, optional): Boolean flag to control the loss 
                 computation. If True, the loss is not computed, otherwise the 
                 loss is computed. Defaults to False.
+            num_classes (int, optional): Number of classes to predict. Defaults
+                to None.
 
         Returns:
             Tuple[torch.Tensor, torch.Tensor]: Output and loss.
         """
-        # Fit support set
-        retain_graph = self.second_order or self.T > 1 
-        for _ in range(self.T):     
-            grads = get_grads(model, X_train, y_train, weights, 
-                self.second_order, retain_graph)
-            weights = update_weights(weights, grads, self.grad_clip, 
-                self.base_lr)
+        # Inner step
+        perform_inner_step = False if self.ncc and not training else True
+        if perform_inner_step:
+            retain_graph = self.second_order or self.T > 1 
+            for _ in range(self.T):     
+                # Compute gradients
+                if self.ncc:
+                    grads = self.get_grads_ncc(model, X_train, y_train, X_test, 
+                        y_test, weights, self.second_order, retain_graph) 
+                else:
+                    grads = get_grads(model, X_train, y_train, weights, 
+                        self.second_order, retain_graph)
+                
+                # Update task weights            
+                weights = update_weights(weights, grads, self.grad_clip, 
+                    self.base_lr)
 
         # Use torch.no_grad when evaluating
         if training:
@@ -322,7 +422,17 @@ class MyMetaLearner(MetaLearner):
         
         # Get and return performance on query set
         with context():
-            out = model.forward_weights(X_test, weights)
+            if self.ncc:
+                if training:
+                    run_prototypes, run_lenght = self.update_prototypes(model, 
+                        X_train, y_train, weights, grad=True)
+                    prototypes = run_prototypes / run_lenght.unsqueeze(1)
+                else:
+                    prototypes = process_support_set(model, weights, X_train, 
+                        y_train, num_classes)
+                out = process_query_set(model, weights, X_test, prototypes)
+            else:
+                out = model.forward_weights(X_test, weights)
         
             if no_loss:
                 loss = None
@@ -330,6 +440,48 @@ class MyMetaLearner(MetaLearner):
                 loss = model.criterion(out, y_test)
             
         return out, loss
+
+    def get_grads_ncc(self,
+                      model: nn.Module, 
+                      X_train: torch.Tensor, 
+                      y_train: torch.Tensor, 
+                      X_test: torch.Tensor, 
+                      y_test: torch.Tensor, 
+                      weights: List[torch.Tensor] = None, 
+                      second_order: bool = False, 
+                      retain_graph: bool = False) -> List[torch.Tensor]:
+        """ Compute the gradients of processing the specified input.
+
+        Args:
+            model (nn.Module): Model to be used.
+            X_train (torch.Tensor): Support set images.
+            y_train (torch.Tensor): Support set labels.
+            X_test (torch.Tensor): Query set images.
+            y_test (torch.Tensor): Query set labels.
+            weights (List[torch.Tensor], optional): Weights to be used by the 
+                model. Defaults to None.
+            second_order (bool, optional): Boolean flag to control if second order
+                derivatives should be computed. Defaults to False.
+            retain_graph (bool, optional): Boolean flag to control if the 
+                derivation graph should be retained. Defaults to False.
+
+        Returns:
+            List[torch.Tensor]: Gradients of the operation
+        """
+        model.zero_grad()
+        if weights is None:
+            weights = model.parameters()
+        
+        run_prototypes, run_lenght = self.update_prototypes(model, X_train, 
+            y_train, weights, grad=True)
+        prototypes = run_prototypes / run_lenght.unsqueeze(1)
+        out = process_query_set(model, weights, X_test, prototypes)
+        
+        loss = model.criterion(out, y_test) 
+        grads = torch.autograd.grad(loss, weights, create_graph=second_order, 
+            retain_graph=retain_graph, allow_unused=True)
+        
+        return list(grads)
 
     @contextlib.contextmanager
     def empty_context(self) -> None:
@@ -397,15 +549,22 @@ class MyLearner(Learner):
         for p in task_weights[-2:]:
             p.requires_grad = True
             
-        # Fit weights
-        retain_graph = self.second_order or self.T > 1 
-        for _ in range(self.T):     
-            grads = get_grads(self.learner, X_train, y_train, task_weights, 
-                self.second_order, retain_graph)
-            task_weights = update_weights(task_weights, grads, self.grad_clip, 
-                self.lr)
+        if self.ncc:
+            with torch.no_grad():
+                prototypes = process_support_set(self.learner, task_weights, 
+                    X_train, y_train, n_ways)
         
-        return MyPredictor(self.learner, task_weights, self.dev)
+        else:
+            prototypes = None
+            # Fit weights
+            retain_graph = self.second_order or self.T > 1 
+            for _ in range(self.T):     
+                grads = get_grads(self.learner, X_train, y_train, task_weights, 
+                    self.second_order, retain_graph)
+                task_weights = update_weights(task_weights, grads, 
+                    self.grad_clip, self.lr)
+        
+        return MyPredictor(self.learner, task_weights, self.dev, prototypes)
 
     def save(self, path_to_save: str) -> None:
         """ Saves the learning object associated to the Learner. 
@@ -473,6 +632,7 @@ class MyLearner(Learner):
             self.grad_clip = self.maml_params["grad_clip"]
             self.second_order = self.maml_params["second_order"]
             self.T = self.maml_params["T"]
+            self.ncc = self.maml_params["ncc"]
         else:
             raise Exception(f"'{maml_params_file}' not found")
         
@@ -482,19 +642,21 @@ class MyPredictor(Predictor):
     def __init__(self, 
                  model: nn.Module, 
                  weights: List[torch.Tensor],
-                 dev: torch.device) -> None:
+                 dev: torch.device,
+                 prototypes: torch.Tensor) -> None:
         """Defines the Predictor initialization.
 
         Args:
             model (nn.Module): Fitted learner.
             weights (List[torch.Tensor]): Best weights for the model.
             dev (torch.device): Device where the data is located.
+            prototypes (torch.Tensor): Support prototypes.
         """
         super().__init__()
         self.model = model
         self.weights = weights
         self.dev = dev
-    
+        self.prototypes = prototypes
 
     def predict(self, query_set: torch.Tensor) -> np.ndarray:
         """ Given a query_set, predicts the probabilities associated to the 
@@ -516,7 +678,11 @@ class MyPredictor(Predictor):
         """
         X_test = query_set.to(self.dev)
         with torch.no_grad():
-            out = self.model.forward_weights(X_test, self.weights)
+            if self.prototypes is not None:
+                out = process_query_set(self.model, self.weights, X_test, 
+                    self.prototypes)
+            else:
+                out = self.model.forward_weights(X_test, self.weights)
             probs = F.softmax(out, dim=1).cpu().numpy()
         
         return probs
