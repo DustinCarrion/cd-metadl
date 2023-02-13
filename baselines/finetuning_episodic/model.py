@@ -7,6 +7,7 @@ network initilization at meta-training time can be with:
 import os
 import random
 import pickle
+import contextlib
 import numpy as np
 import torch
 import torch.nn as nn
@@ -79,17 +80,28 @@ class MyMetaLearner(MetaLearner):
         
         # General data parameters
         self.should_train = True
-        self.train_batch_size = 16
-        self.T_train = 2
+        self.ncc = True
+        self.batch_size = 16
         self.train_tasks = 10
         self.val_tasks = 10
         self.val_after = 5
+        
+        # Helpers for convert to global labels
+        self.classes_per_dataset = {
+            "ACT_40": 39, "ACT_410": 29, "APL": 21, "AWA": 50, "BCT": 33, 
+            "BRD": 315, "BTS": 26, "CRS": 196, "DOG": 120, "FLW": 102, 
+            "FNG": 25, "INS": 104, "INS_2": 102, "MD_5_BIS": 706, "MD_6": 703, 
+            "MD_MIX": 706, "MED_LF": 25, "PLK": 86, "PLT_DOC": 27, "PLT_NET": 25, 
+            "PLT_VIL": 38, "PNU": 19, "PRT": 21, "RESISC": 45, "RSD": 38, 
+            "RSICB": 45, "SPT": 73, "TEX": 64, "TEX_ALOT": 250, "TEX_DTD": 47
+        }
+        self.mapping = {}
         
         # General model parameters
         self.dev = self.get_device()
         self.opt_fn = torch.optim.Adam
         self.model_args = {
-            "num_classes": self.total_classes,
+            "num_classes": self.train_classes if self.ncc else self.total_classes,
             "dev": self.dev, 
             "num_blocks": 18, 
             "pretrained": False 
@@ -136,27 +148,49 @@ class MyMetaLearner(MetaLearner):
         """
         if self.should_train:
             for i, task in enumerate(meta_train_generator(self.train_tasks)):
-                
-                # Prepare data
-                num_ways = task.num_ways
-                X_support, _, y_support = task.support_set
-                X_support, y_support = X_support.to(self.dev), y_support.to(self.dev)
-                X_query, _, y_query = task.query_set
-                X_query = X_query.to(self.dev)
-                
-                # both support set and query set are used to fine-tune
-                X_train = torch.cat([X_support, X_query], dim=0)
-                y_train = torch.cat([y_support, y_query], dim=0)
-                
-                # Optimize learner
-                for _ in range(self.T_train):
-                    X_batch, y_batch = get_batch_without_replacement(X_train, y_train,
-                                                 self.train_batch_size)
-                    out, loss = optimize(self.meta_learner, 
-                                         self.optimizer, X_batch, y_batch)
-                
+                if self.ncc:
+                    # Prepare data
+                    num_ways = task.num_ways
+                    X_train, y_train, _ = task.support_set
+                    X_train, y_train = X_train.to(self.dev), y_train.to(self.dev)
+                    X_test, y_test, _ = task.query_set
+                    X_test, y_test = X_test.to(self.dev), y_test.to(self.dev)
+                    
+                    # Optimize metalearner
+                    self.optimizer.zero_grad()
+                    out, loss = self.compute_out_and_loss(self.meta_learner, 
+                        X_train, y_train, X_test, y_test, True, num_ways)
+                    loss.backward()
+                    self.optimizer.step()  
+                        
                     # Log iteration
-                    self.log((X_batch, y_batch), out.detach().cpu().numpy(), loss)
+                    self.log(task, out.detach().cpu().numpy(), loss.item())
+                    
+                else:
+                    # Prepare data
+                    dataset = task.dataset
+                    X_train, _, y_train = task.support_set
+                    X_train, y_train = X_train.to(self.dev), y_train.to(self.dev)
+                    X_test, _, y_test = task.query_set
+                    X_test, y_test = X_test.to(self.dev), y_test.to(self.dev)
+
+                    # Both support set and query set are used to fine-tune
+                    X_train = torch.cat([X_train, X_test], dim=0)
+                    y_train = torch.cat([y_train, y_test], dim=0)
+                    
+                    # Convert local to global labels
+                    y_train = self.convert_to_global_labels(y_train, dataset)
+                    
+                    # Optimize learner
+                    for start in range(0, X_train.shape[0], self.batch_size):
+                        end = start + self.batch_size
+                        X_batch, y_batch = X_train[start:end], y_train[start:end]
+                        out, loss = optimize(self.meta_learner, self.optimizer, 
+                            X_batch, y_batch)
+                    
+                        # Log iteration
+                        self.log((X_batch, y_batch), out.detach().cpu().numpy(), 
+                            loss)
                 
                 if (i + 1) % self.val_after == 0:
                     self.meta_valid(meta_valid_generator)
@@ -170,6 +204,7 @@ class MyMetaLearner(MetaLearner):
             "lr": self.val_lr,
             "T": self.T,
             "batch_size": self.val_batch_size,
+            "ncc": self.ncc
         }
         return MyLearner(self.model_args, self.best_state, learner_params)
     
@@ -198,16 +233,23 @@ class MyMetaLearner(MetaLearner):
             val_optimizer = self.opt_fn(self.val_learner.parameters(), 
                 self.val_lr)
             
-            # Optimize learner
-            for _ in range(self.T):        
-                X_batch, y_batch = get_batch(X_train, y_train, 
-                    self.val_batch_size)
-                optimize(self.val_learner, val_optimizer, X_batch, y_batch)
-
-            # Evaluate learner
-            with torch.no_grad():
-                out = self.val_learner(X_test)
+            if self.ncc:
+                # Evaluate learner
+                out, _ = self.compute_out_and_loss(self.val_learner, X_train, 
+                    y_train, X_test, y_test, False, num_ways, True)
                 preds = torch.argmax(out, dim=1).cpu().numpy()
+            
+            else:
+                # Optimize learner
+                for _ in range(self.T):        
+                    X_batch, y_batch = get_batch(X_train, y_train, 
+                        self.val_batch_size)
+                    optimize(self.val_learner, val_optimizer, X_batch, y_batch)
+
+                # Evaluate learner
+                with torch.no_grad():
+                    out = self.val_learner(X_test)
+                    preds = torch.argmax(out, dim=1).cpu().numpy()
             
             # Log iteration
             self.log(task, out.cpu().numpy(), meta_train=False)
@@ -237,6 +279,83 @@ class MyMetaLearner(MetaLearner):
             print("Using CPU")
         return device
     
+    def convert_to_global_labels(self, 
+                                 local_labels: torch.Tensor,
+                                 dataset: str) -> torch.Tensor:
+        """ Convert the local labels of the current task to global labels. 
+
+        Args:
+            local_labels (torch.Tensor): Current local labels.
+            dataset (str): Current dataset.
+
+        Returns:
+            torch.Tensor: Global labels.
+        """
+        if len(self.mapping) == 0:
+            self.mapping[dataset] = 0
+            return local_labels
+        
+        if dataset not in self.mapping:
+            val = 0
+            for c_dataset in self.mapping.keys():
+                val += self.classes_per_dataset[c_dataset]
+            self.mapping[dataset] = val
+            
+        return local_labels + self.mapping[dataset]
+        
+    def compute_out_and_loss(self,
+                             model: nn.Module,
+                             X_train: torch.Tensor, 
+                             y_train: torch.Tensor, 
+                             X_test: torch.Tensor, 
+                             y_test: torch.Tensor,
+                             training: bool, 
+                             num_classes: int,
+                             no_loss: bool = False) -> Tuple[torch.Tensor, 
+                                                             torch.Tensor]:
+        """ Compute the output and loss using the specified data.
+
+        Args:
+            model (nn.Module): Model to be used.
+            X_train (torch.Tensor): Support set images.
+            y_train (torch.Tensor): Support set labels.
+            X_test (torch.Tensor): Query set images.
+            y_test (torch.Tensor): Query set labels.
+            training (bool): Boolean flag to control the execution context. If 
+                True, keep track of the gradients, otherwise the gradients are 
+                ignored.
+            num_classes (int): Number of classes to predict.
+            no_loss (bool, optional): Boolean flag to control the loss 
+                computation. If True, the loss is not computed, otherwise the 
+                loss is computed. Defaults to False.
+
+        Returns:
+            Tuple[torch.Tensor, torch.Tensor]: Output and loss.
+        """
+        # Use torch.no_grad when evaluating
+        if training:
+            context = self.empty_context
+        else:
+            context = torch.no_grad
+
+        with context():
+            prototypes = process_support_set(model, X_train, y_train, 
+                num_classes)
+            out = process_query_set(model, X_test, prototypes)
+            if no_loss:
+                loss = None
+            else:
+                loss = model.criterion(out, y_test) / (num_classes 
+                    * len(y_test)) 
+            
+        return out, loss
+
+    @contextlib.contextmanager
+    def empty_context(self) -> None:
+        """ Defines an empty context to avoid computing unnecessary gradients.
+        """
+        yield None
+
 
 class MyLearner(Learner):
 
@@ -285,12 +404,19 @@ class MyLearner(Learner):
         self.learner.freeze_layers(n_ways)
         optimizer = self.opt_fn(self.learner.parameters(), self.lr)
         
-        # Optimize learner
-        for i in range(self.T):        
-            X_batch, y_batch = get_batch(X_train, y_train, self.batch_size)
-            optimize(self.learner, optimizer, X_batch, y_batch)
+        if self.ncc:
+            with torch.no_grad():
+                prototypes = process_support_set(self.learner, X_train, 
+                    y_train, n_ways)
         
-        return MyPredictor(self.learner, self.dev)
+        else:
+            # Optimize learner
+            for _ in range(self.T):        
+                X_batch, y_batch = get_batch(X_train, y_train, self.batch_size)
+                optimize(self.learner, optimizer, X_batch, y_batch)
+            prototypes = None
+        
+        return MyPredictor(self.learner, self.dev, prototypes)
 
     def save(self, path_to_save: str) -> None:
         """ Saves the learning object associated to the Learner. 
@@ -347,6 +473,7 @@ class MyLearner(Learner):
             self.lr = self.learner_params["lr"]
             self.T = self.learner_params["T"]
             self.batch_size = self.learner_params["batch_size"]
+            self.ncc = self.learner_params["ncc"]
         else:
             raise Exception(f"'{learner_params_file}' not found")
         
@@ -355,16 +482,19 @@ class MyPredictor(Predictor):
 
     def __init__(self, 
                  model: nn.Module, 
-                 dev: torch.device) -> None:
+                 dev: torch.device,
+                 prototypes: torch.Tensor) -> None:
         """ Defines the Predictor initialization.
 
         Args:
             model (nn.Module): Fitted learner. 
             dev (torch.device): Device where the data is located.
+            prototypes (torch.Tensor): Support prototypes.
         """
         super().__init__()
         self.model = model
         self.dev = dev
+        self.prototypes = prototypes
 
     def predict(self, query_set: torch.Tensor) -> np.ndarray:
         """ Given a query_set, predicts the probabilities associated to the 
@@ -386,27 +516,10 @@ class MyPredictor(Predictor):
         """
         X_test = query_set.to(self.dev)
         with torch.no_grad():
-            out = self.model(X_test)
+            if self.prototypes is not None:
+                out = process_query_set(self.model, X_test, self.prototypes)
+            else:
+                out = self.model(X_test)
             probs = F.softmax(out, dim=1).cpu().numpy()
         
         return probs
-
-
-def get_batch_without_replacement(X: torch.Tensor,
-                     y: torch.Tensor,
-                     batch_size: int) -> Tuple[torch.Tensor, torch.Tensor]:
-    """ Get a batch of the specified size from the specified data.
-
-    Args:
-        X (torch.Tensor): Images.
-        y (torch.Tensor): Labels.
-        batch_size (int): Desired batch size.
-
-    Returns:
-        Tuple[torch.Tensor, torch.Tensor]: Batch of the specified size.
-        
-    adapted from get_batch, in order to sample batches without replacement
-    """
-    batch_indices = np.random.choice(list(range(0, X.size()[0])), size=batch_size, replace=False)
-    X_batch, y_batch = X[batch_indices], y[batch_indices]
-    return X_batch, y_batch
